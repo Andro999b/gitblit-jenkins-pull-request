@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gitblit.GitBlit;
 import com.gitblit.extensions.TicketHook;
-import com.gitblit.git.PatchsetCommand;
 import com.gitblit.models.TicketModel;
 import com.gitblit.models.TicketModel.*;
 import com.gitblit.servlet.GitblitContext;
@@ -39,8 +38,8 @@ public class JenkinsPullRequestTicketHook extends TicketHook {
 
     private void requestMergeTicket(TicketModel ticket) {
         GitBlit gitblit = GitblitContext.getManager(GitBlit.class);
-
-        String branch = PatchsetCommand.getTicketBranch(ticket.number);
+        
+        String branch = getThicketBranchName(ticket);
         
         String jenkinsUrl = gitblit.getString("jenkins.server", "http://yourserver/jenkins");
         String jenkinsToken = gitblit.getString("jenkins.token", "");
@@ -48,20 +47,30 @@ public class JenkinsPullRequestTicketHook extends TicketHook {
         
         List<String> mergersList = getMergersList(jenkinsUrl, mergeJobsList);
         
-        if(mergersList.contains(ticket.repository)){
+        String jobName = getJobName(ticket.repository);
+        
+        if(mergersList.contains(jobName)){
             try {
-                String jenkinsJobUrl = jenkinsUrl + "/view/" + mergeJobsList + "/job/" + ticket.repository;
+                String jenkinsJobUrl = jenkinsUrl + "/view/" + mergeJobsList + "/job/" + jobName;
                 String params = "branch=" + branch;
                 
                 if(!jenkinsToken.isEmpty())
                     params += "&token=" + jenkinsToken;
                 
-                new URL(jenkinsJobUrl + "/buildWithParameters?delay=0sec&" + params).getContent();
+                new URL(jenkinsJobUrl + "/buildWithParameters?delay=0sec&" + params).openConnection().getInputStream();
             } catch (IOException ex) {
                 LoggerFactory.getLogger(JenkinsPullRequestTicketHook.class)
-                    .error("Error to run jenkins merge job for" + ticket.repository, ex);
+                    .error("Error to run jenkins merge job for " + ticket.repository, ex);
             }
         }
+    }
+
+    private static String getJobName(String repositoryName) {
+        return repositoryName.replace("/", "-");
+    }
+    
+    private static String getThicketBranchName(TicketModel ticket) {
+        return "ticket/" + ticket.number;
     }
 
     private static List<String> getMergersList(String jenkinsUrl, String gitMergeJobsList) {
