@@ -37,6 +37,9 @@ public class JenkinsPullRequestTicketHook extends TicketHook {
     }
 
     private void requestMergeTicket(TicketModel ticket) {
+        if(!ticket.hasPatchsets()) // нечего мерджить
+            return;
+        
         GitBlit gitblit = GitblitContext.getManager(GitBlit.class);
         
         String branch = getThicketBranchName(ticket);
