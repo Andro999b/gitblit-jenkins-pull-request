@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.*;
+
 import org.slf4j.LoggerFactory;
 import ro.fortsoft.pf4j.Extension;
 
@@ -23,6 +25,11 @@ import ro.fortsoft.pf4j.Extension;
  */
 @Extension
 public class JenkinsPullRequestTicketHook extends TicketHook {
+    private final ExecutorService executorService;
+
+    public JenkinsPullRequestTicketHook() {
+        executorService = Executors.newFixedThreadPool(5);
+    }
 
     @Override
     public void onNewTicket(TicketModel ticket) {
@@ -39,28 +46,30 @@ public class JenkinsPullRequestTicketHook extends TicketHook {
     private void requestMergeTicket(TicketModel ticket) {
         if(!ticket.hasPatchsets()) // нечего мерджить
             return;
-        
+
+        String branch = getTicketBranchName(ticket);
+
         GitBlit gitblit = GitblitContext.getManager(GitBlit.class);
-        
-        String branch = getThicketBranchName(ticket);
-        
+
         String jenkinsUrl = gitblit.getString("jenkins.server", "http://yourserver/jenkins");
         String jenkinsToken = gitblit.getString("jenkins.token", "");
-        String mergeJobsList = gitblit.getString("jenkins.mergeJobsList", "git-merg-jobs");
+        String ticketsJobsListName = gitblit.getString("jenkins.ticketsJobsList", "git-tickets-jobs");
         
-        List<String> mergersList = getMergersList(jenkinsUrl, mergeJobsList);
+        List<String> ticketsJobsList = getTicketsJobs(jenkinsUrl, ticketsJobsListName);
         
         String jobName = getJobName(ticket.repository);
         
-        if(mergersList.contains(jobName)){
+        if(ticketsJobsList.contains(jobName)){
             try {
-                String jenkinsJobUrl = jenkinsUrl + "/view/" + mergeJobsList + "/job/" + jobName;
+                String jenkinsJobUrl = jenkinsUrl + "/view/" + ticketsJobsListName + "/job/" + jobName;
                 String params = "branch=" + branch;
                 
                 if(!jenkinsToken.isEmpty())
                     params += "&token=" + jenkinsToken;
                 
                 new URL(jenkinsJobUrl + "/buildWithParameters?delay=0sec&" + params).openConnection().getInputStream();
+
+                waitForResult(ticket, jobName);
             } catch (IOException ex) {
                 LoggerFactory.getLogger(JenkinsPullRequestTicketHook.class)
                     .error("Error to run jenkins merge job for " + ticket.repository, ex);
@@ -68,15 +77,19 @@ public class JenkinsPullRequestTicketHook extends TicketHook {
         }
     }
 
-    private static String getJobName(String repositoryName) {
+    private void waitForResult(TicketModel ticket, String jobName) {
+        executorService.execute(new ResultWaiter(ticket.number, jobName, ticket.repository));
+    }
+
+    private String getJobName(String repositoryName) {
         return repositoryName.replace("/", "-");
     }
     
-    private static String getThicketBranchName(TicketModel ticket) {
+    private String getTicketBranchName(TicketModel ticket) {
         return "ticket/" + ticket.number;
     }
 
-    private static List<String> getMergersList(String jenkinsUrl, String gitMergeJobsList) {
+    private List<String> getTicketsJobs(String jenkinsUrl, String gitMergeJobsList) {
 
         try {
             InputStream openStream = new URL(jenkinsUrl + "/view/" +gitMergeJobsList+ "/api/json").openStream();
@@ -85,19 +98,38 @@ public class JenkinsPullRequestTicketHook extends TicketHook {
             JsonNode root = mapper.readTree(openStream);
             Iterator<JsonNode> elements = root.get("jobs").elements();
             
-            List<String> avaliableJobs = new ArrayList<>();
+            List<String> availableJobs = new ArrayList<>();
             
             while (elements.hasNext()) {
                 JsonNode next = elements.next();
-                avaliableJobs.add(next.get("name").asText());
+                availableJobs.add(next.get("name").asText());
             }
             
-            return avaliableJobs;
+            return availableJobs;
         } catch (Exception ex) {
             LoggerFactory.getLogger(JenkinsPullRequestTicketHook.class)
-                    .error("Error while getting list on git-merg-jobs from jenkins", ex);
+                    .error("Error while getting list on git-tickets-jobs from jenkins", ex);
         }
 
         return Collections.emptyList();
     }
+
+    private class ResultWaiter implements Runnable {
+        private long ticketNumber;
+        private String repository;
+        private String jenkinsJob;
+        private long jenkinsJobNumber;
+
+        public ResultWaiter(long ticketNumber, String jenkinsJob, String repository) {
+            this.ticketNumber = ticketNumber;
+            this.jenkinsJob = jenkinsJob;
+            this.repository = repository;
+        }
+
+        @Override
+        public void run() {
+
+        }
+    }
+
 }
